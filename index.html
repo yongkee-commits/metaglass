@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Cue</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+  :root{
+    --bg:#fff; --fg:#0a0a0a; --muted:#8a8a8a; --faint:#b3b3b3;
+    --line:#e6e6e6; --ink:#0a0a0a; --inkfg:#fff; --err:#c0392b;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#0d0d0d; --fg:#f4f4f4; --muted:#8c8c8c; --faint:#5a5a5a;
+      --line:#232323; --ink:#f4f4f4; --inkfg:#0a0a0a; --err:#ff6b5e; }
+  }
+  *{ box-sizing:border-box; letter-spacing:0 !important; -webkit-tap-highlight-color:transparent; }
+  html,body{ height:100%; }
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:Pretendard,-apple-system,BlinkMacSystemFont,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    display:flex; flex-direction:column; height:100dvh; overflow:hidden;
+  }
+
+  /* ── conversation ── */
+  .zone{ flex:1; display:flex; flex-direction:column; padding:0 26px; min-height:0; overflow:hidden; }
+  .top{ justify-content:flex-end; padding-top:calc(env(safe-area-inset-top) + 24px); padding-bottom:24px; }
+  .bot{ justify-content:flex-start; padding-top:24px; padding-bottom:calc(env(safe-area-inset-bottom) + 12px); }
+  .big{ margin:0; font-size:22px; line-height:1.4; font-weight:700; text-wrap:balance; }
+  .top .big{ font-weight:600; }
+  .small{ margin:0; font-size:14px; line-height:1.45; color:var(--muted); font-weight:500; }
+  .top .small{ margin-bottom:12px; } .bot .small{ margin-top:12px; }
+  .idle{ color:var(--faint); font-weight:500; }
+
+  /* ── center line ── */
+  .mid{ position:relative; height:1px; background:var(--line); flex:none; }
+  .switch{
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    display:flex; align-items:center; gap:8px;
+    background:var(--bg); padding:8px 15px; border-radius:999px;
+    border:1px solid var(--line); font-size:13px; font-weight:700; color:var(--fg);
+    cursor:pointer; user-select:none;
+  }
+  .switch .dot{ width:8px; height:8px; border-radius:50%; background:var(--ink); }
+  .listening .switch .dot{ animation:blink 1.5s infinite; }
+  @keyframes blink{ 0%,100%{opacity:1} 50%{opacity:.2} }
+  @media(prefers-reduced-motion:reduce){ .switch .dot{ animation:none !important } }
+  .paused .switch .dot{ background:var(--faint); }
+
+  /* ── footer ── */
+  .bar{
+    flex:none; display:flex; align-items:center; justify-content:space-between;
+    padding:10px 22px calc(env(safe-area-inset-bottom) + 12px);
+    font-size:12.5px; color:var(--muted); border-top:1px solid var(--line);
+  }
+  .bar .status{ font-weight:500; } .bar .status.err{ color:var(--err); }
+  .bar .links{ display:flex; gap:18px; }
+  .bar a{ color:var(--muted); font-weight:600; text-decoration:none; cursor:pointer; }
+
+  /* ── setup overlay ── */
+  .overlay{
+    position:fixed; inset:0; background:var(--bg); z-index:10;
+    display:flex; flex-direction:column; justify-content:center;
+    padding:32px 30px calc(env(safe-area-inset-bottom) + 32px); gap:18px;
+  }
+  .overlay.hidden{ display:none; }
+  .overlay h1{ margin:0; font-size:24px; font-weight:700; }
+  .overlay p{ margin:0; font-size:14px; color:var(--muted); line-height:1.6; }
+  .overlay input{
+    width:100%; font-family:inherit; font-size:15px; padding:15px 16px;
+    border:1px solid var(--line); border-radius:14px; background:transparent; color:var(--fg);
+  }
+  .overlay input:focus{ outline:none; border-color:var(--ink); }
+  .overlay button{
+    width:100%; height:54px; border:none; border-radius:27px;
+    background:var(--ink); color:var(--inkfg); font-family:inherit;
+    font-size:15px; font-weight:700; cursor:pointer;
+  }
+  .overlay .fine{ font-size:12px; color:var(--faint); line-height:1.6; }
+  .overlay .fine b{ color:var(--muted); }
+</style>
+</head>
+<body class="paused">
+
+  <div class="zone top">
+    <p class="small" id="pEn">&nbsp;</p>
+    <p class="big idle" id="pKo">상대가 영어로 말하면 여기 한글로 떠요</p>
+  </div>
+
+  <div class="mid">
+    <div class="switch" id="switch">
+      <span class="dot"></span>
+      <span id="dir">한 → 영</span>
+    </div>
+  </div>
+
+  <div class="zone bot">
+    <p class="big idle" id="mEn">한국어로 말하면 여기 영어로 떠요</p>
+    <p class="small" id="mKo">&nbsp;</p>
+  </div>
+
+  <div class="bar">
+    <span class="status" id="status">일시정지됨 — 스위치를 눌러 시작</span>
+    <span class="links">
+      <a id="pause">시작</a>
+      <a id="settings">설정</a>
+    </span>
+  </div>
+
+  <div class="overlay" id="overlay">
+    <h1>Cue</h1>
+    <p>상대 말은 한글로, 내 말은 영어로. 시작하려면 Claude API 키를 넣어줘. 키는 이 브라우저에만 저장되고 서버로 안 보내져.</p>
+    <input id="keyInput" type="password" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off" spellcheck="false">
+    <button id="save">시작하기</button>
+    <p class="fine"><b>참고:</b> 마이크 권한이 필요해. HTTPS(또는 이 페이지)에서 열어야 마이크가 켜져. 크롬(안드로이드/PC)에서 가장 잘 돼 — iOS 사파리는 음성인식이 제한적일 수 있어.</p>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ── persona (내 성향 — 나중에 수정 가능) ──
+  var PERSONA =
+    "You are the personal live interpreter for a Korean man in his 40s: a design director and AI product builder who loves golf. " +
+    "His personality: witty, charming, well-mannered, sharp, and quick on his feet. " +
+    "He speaks Korean; render it as natural, spoken English a native speaker would actually say in a relaxed conversation — " +
+    "keep his meaning and personality, don't be stiff or literal. Output ONLY the English sentence(s). No quotes, no notes, no explanations.";
+  var PARTNER =
+    "Translate the following English (said by the person my user is talking with) into natural, conversational Korean so my user understands instantly. " +
+    "Output ONLY the Korean. No quotes, no notes.";
+
+  var MODEL = "claude-haiku-4-5";
+
+  var $ = function(id){ return document.getElementById(id); };
+  var body = document.body;
+  var els = {
+    pEn:$("pEn"), pKo:$("pKo"), mEn:$("mEn"), mKo:$("mKo"),
+    dir:$("dir"), status:$("status"), pause:$("pause"),
+    overlay:$("overlay"), keyInput:$("keyInput")
+  };
+
+  var apiKey = localStorage.getItem("cue_key") || "";
+  var mode = "ko2en";          // ko2en | en2ko
+  var running = false;         // want to be listening
+  var recActive = false;       // recognition currently running
+  var rec = null;
+
+  // ── setup / key ──
+  function openSetup(){ els.overlay.classList.remove("hidden"); els.keyInput.value = apiKey; }
+  function closeSetup(){ els.overlay.classList.add("hidden"); }
+  $("save").onclick = function(){
+    var k = els.keyInput.value.trim();
+    if(!k){ els.keyInput.focus(); return; }
+    apiKey = k; localStorage.setItem("cue_key", k);
+    closeSetup(); start();
+  };
+  $("settings").onclick = function(){ stop(); openSetup(); };
+
+  // ── speech recognition ──
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  function buildRec(){
+    if(!SR){ setStatus("이 브라우저는 음성인식을 지원하지 않아 (크롬 권장)", true); return null; }
+    var r = new SR();
+    r.lang = (mode === "ko2en") ? "ko-KR" : "en-US";
+    r.continuous = true;
+    r.interimResults = true;
+    r.onresult = onResult;
+    r.onerror = function(e){
+      if(e.error === "not-allowed" || e.error === "service-not-allowed"){
+        setStatus("마이크 권한이 필요해 — 브라우저에서 허용해줘", true); running = false; render();
+      } else if(e.error === "no-speech"){ /* ignore */ }
+      else { setStatus("음성인식 오류: " + e.error, true); }
+    };
+    r.onend = function(){ recActive = false; if(running){ try{ r.start(); recActive = true; }catch(_){} } };
+    return r;
+  }
+  function startRec(){
+    if(!rec) rec = buildRec();
+    if(!rec) return;
+    if(recActive){ return; }
+    try{ rec.start(); recActive = true; }catch(_){}
+  }
+  function stopRec(){ running = false; if(rec){ try{ rec.stop(); }catch(_){} } recActive = false; }
+
+  var interim = "";
+  function onResult(ev){
+    var finalText = "", interimText = "";
+    for(var i = ev.resultIndex; i < ev.results.length; i++){
+      var t = ev.results[i][0].transcript;
+      if(ev.results[i].isFinal) finalText += t; else interimText += t;
+    }
+    interim = interimText;
+    showInterim(interimText);
+    if(finalText.trim()){ handleFinal(finalText.trim()); }
+  }
+
+  function showInterim(t){
+    if(!t) return;
+    if(mode === "ko2en"){ els.mKo.textContent = t; els.mKo.classList.remove("idle"); }
+    else { els.pEn.textContent = t; els.pEn.classList.remove("idle"); }
+  }
+
+  function handleFinal(text){
+    if(mode === "ko2en"){
+      els.mKo.textContent = text; els.mKo.classList.remove("idle");
+      els.mEn.textContent = "…"; els.mEn.classList.remove("idle");
+    } else {
+      els.pEn.textContent = text; els.pEn.classList.remove("idle");
+      els.pKo.textContent = "…"; els.pKo.classList.remove("idle");
+    }
+    translate(text, mode).then(function(out){
+      if(mode === "ko2en"){ els.mEn.textContent = out; }
+      else { els.pKo.textContent = out; }
+    }).catch(function(err){
+      setStatus(err.message || "번역 실패", true);
+      if(mode === "ko2en") els.mEn.textContent = "(오류)"; else els.pKo.textContent = "(오류)";
+    });
+  }
+
+  // ── Claude API (direct browser call) ──
+  function translate(text, m){
+    var sys = (m === "ko2en") ? PERSONA : PARTNER;
+    return fetch("https://api.anthropic.com/v1/messages", {
+      method:"POST",
+      headers:{
+        "content-type":"application/json",
+        "x-api-key":apiKey,
+        "anthropic-version":"2023-06-01",
+        "anthropic-dangerous-direct-browser-access":"true"
+      },
+      body:JSON.stringify({
+        model:MODEL, max_tokens:400,
+        system:sys,
+        messages:[{ role:"user", content:text }]
+      })
+    }).then(function(res){
+      if(!res.ok){
+        return res.text().then(function(t){
+          if(res.status === 401) throw new Error("API 키가 올바르지 않아 (설정에서 확인)");
+          throw new Error("API 오류 " + res.status);
+        });
+      }
+      return res.json();
+    }).then(function(data){
+      var block = (data.content || []).find(function(b){ return b.type === "text"; });
+      return block ? block.text.trim() : "";
+    });
+  }
+
+  // ── controls ──
+  function setStatus(t, isErr){ els.status.textContent = t; els.status.classList.toggle("err", !!isErr); }
+  function render(){
+    body.classList.toggle("listening", running);
+    body.classList.toggle("paused", !running);
+    els.dir.textContent = (mode === "ko2en") ? "한 → 영" : "영 → 한";
+    els.pause.textContent = running ? "일시정지" : "시작";
+    if(running) setStatus(mode === "ko2en" ? "듣는 중 — 한국어로 말하세요" : "듣는 중 — 상대 영어를 잡는 중");
+    else setStatus("일시정지됨 — 스위치를 눌러 시작");
+  }
+  function start(){
+    if(!apiKey){ openSetup(); return; }
+    running = true; startRec(); render();
+  }
+  function stop(){ stopRec(); render(); }
+  function toggleMode(){
+    mode = (mode === "ko2en") ? "en2ko" : "ko2en";
+    if(running){ // restart recognition with new lang
+      running = true;
+      if(rec){ try{ rec.stop(); }catch(_){} }
+      rec = null; recActive = false;
+      setTimeout(function(){ if(running) startRec(); }, 200);
+    }
+    render();
+  }
+
+  $("switch").onclick = function(){
+    if(!running && !apiKey){ openSetup(); return; }
+    if(!running){ start(); }   // first tap starts
+    else { toggleMode(); }     // subsequent taps switch direction
+  };
+  els.pause.onclick = function(){ if(running) stop(); else start(); };
+
+  // ── init ──
+  if(apiKey) closeSetup(); else openSetup();
+  render();
+})();
+</script>
+</body>
+</html>
