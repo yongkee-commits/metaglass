@@ -40,11 +40,13 @@
   .seg.casual .a{ color:var(--bg); } .seg.casual .b{ color:var(--sub); }
   .seg.biz .a{ color:var(--sub); } .seg.biz .b{ color:var(--bg); }
 
-  /* zones */
-  .partner{ margin-top:54px; display:flex; flex-direction:column; gap:18px; }
+  /* zones (tap to choose speaker) */
+  .partner{ margin-top:54px; display:flex; flex-direction:column; gap:18px; cursor:pointer; }
   .rule{ height:1px; background:var(--line); margin-top:44px; }
-  .mine{ margin-top:44px; display:flex; flex-direction:column; gap:18px; }
+  .mine{ margin-top:44px; display:flex; flex-direction:column; gap:18px; cursor:pointer; }
   .spacer{ flex:1 1 auto; min-height:0; }
+  .zone-active{ /* active side subtly emphasized via opacity of the other */ }
+  .dim{ opacity:.5; }
 
   .en{ font-family:Pretendard; font-weight:500; font-size:30px; line-height:1.3; color:var(--fg); }
   .mine .en{ font-weight:600; }
@@ -60,7 +62,7 @@
     text-transform:uppercase; white-space:nowrap; pointer-events:none;
   }
 
-  /* minimal status (feedback + settings entry) */
+  /* minimal status */
   .status{ flex:none; text-align:center; font-family:Pretendard; font-size:12px; color:var(--faint); padding-top:14px; cursor:pointer; }
   .status.err{ color:var(--err); }
 
@@ -94,14 +96,14 @@
       <button class="b" data-int data-p="business">비즈니스</button>
     </div>
 
-    <div class="partner">
+    <div class="partner" id="zPartner" data-int>
       <div class="en" id="pEn">so, any hobbies outside of work?</div>
       <div class="ko" id="pKo">일 말고 취미는 좀 있어요?</div>
     </div>
 
     <div class="rule"></div>
 
-    <div class="mine">
+    <div class="mine" id="zMine" data-int>
       <div class="en" id="mEn"></div>
       <div class="ko" id="mKo">골프 완전 좋아해요. 주말마다 라운딩 나가고 요즘은 스윙 교정 중이에요.</div>
     </div>
@@ -110,7 +112,6 @@
     <div class="status" id="status" data-int>설정</div>
   </div>
 
-  <!-- 설정 / 문장함 -->
   <div class="sheet" id="sheet">
     <div class="scrim" data-close></div>
     <div class="panel" id="panel"></div>
@@ -133,24 +134,22 @@
 
   var $=function(s){return document.getElementById(s);};
   var pEn=$("pEn"), pKo=$("pKo"), mEn=$("mEn"), mKo=$("mKo"), statusEl=$("status"), seg=$("seg");
+  var zPartner=$("zPartner"), zMine=$("zMine");
 
   var apiKey=localStorage.getItem("cue_key")||"";
   var preset=localStorage.getItem("cue_preset")||"casual";
   var saved=JSON.parse(localStorage.getItem("cue_saved")||"[]");
-  var running=false, recActive=false, rec=null, current=null, started=false;
+  var running=false, recActive=false, rec=null, current=null, side="me"; // "me" | "partner"
 
-  // ---- initial example rendered exactly like the Figma ----
   renderOut("I’m really into golf. I play every weekend, and lately I’ve been fixing my swing.",
     [{word:"weekend",pron:"위켄드"},{word:"lately",pron:"레이틀리"},{word:"swing",pron:"스윙"}]);
 
-  // ---- preset segmented ----
   seg.className = "seg "+(preset==="business"?"biz":"casual");
   Array.prototype.forEach.call(seg.querySelectorAll("button"),function(b){
     b.onclick=function(){ preset=b.dataset.p; localStorage.setItem("cue_preset",preset);
       seg.className="seg "+(preset==="business"?"biz":"casual"); };
   });
 
-  // ---- render English with pronunciation pills ----
   function esc(s){ return s.replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
   function escReg(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
   function renderOut(en, hints){
@@ -159,14 +158,11 @@
       if(!h||!h.word||!h.pron) return;
       var w=esc(String(h.word));
       var re=new RegExp('(^|[^\\w])('+escReg(w)+')(?=[^\\w]|$)');
-      if(re.test(html)){
-        html=html.replace(re,'$1<span class="w">$2<span class="pron">'+esc(String(h.pron))+'</span></span>');
-      }
+      if(re.test(html)) html=html.replace(re,'$1<span class="w">$2<span class="pron">'+esc(String(h.pron))+'</span></span>');
     });
     mEn.innerHTML=html; mEn.classList.remove("idle");
   }
 
-  // ---- Claude ----
   function ask(text, mode){
     var sys = mode==="partner" ? PARTNER : (PERSONA+" "+TONE[preset]+FORMAT);
     return fetch("https://api.anthropic.com/v1/messages",{
@@ -186,34 +182,49 @@
     }).catch(function(e){ setStatus(e.message,true); mEn.textContent="(오류)"; });
   }
 
-  // ---- speech (single direction: my Korean) ----
+  function handlePartner(english){
+    pEn.textContent=english; pKo.textContent="…";
+    ask(english,"partner").then(function(ko){ pKo.textContent=ko; })
+    .catch(function(e){ setStatus(e.message,true); pKo.textContent="(오류)"; });
+  }
+
   var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   function buildRec(){
     if(!SR){ setStatus("이 브라우저는 음성인식 미지원 (크롬 권장)",true); return null; }
-    var r=new SR(); r.lang="ko-KR"; r.continuous=true; r.interimResults=true;
+    var r=new SR(); r.lang=(side==="partner")?"en-US":"ko-KR"; r.continuous=true; r.interimResults=true;
     r.onresult=function(ev){ var fin="",it=""; for(var i=ev.resultIndex;i<ev.results.length;i++){ var t=ev.results[i][0].transcript; ev.results[i].isFinal?fin+=t:it+=t; }
-      if(it) mKo.textContent=it; if(fin.trim()) handleMine(fin.trim()); };
+      if(it){ if(side==="partner") pEn.textContent=it; else mKo.textContent=it; }
+      if(fin.trim()){ side==="partner"?handlePartner(fin.trim()):handleMine(fin.trim()); } };
     r.onerror=function(e){ if(e.error==="not-allowed"||e.error==="service-not-allowed"){ setStatus("마이크 권한을 허용해줘",true); running=false; paint(); } else if(e.error!=="no-speech"){ setStatus("음성 오류: "+e.error,true);} };
     r.onend=function(){ recActive=false; if(running){ try{r.start();recActive=true;}catch(_){} } };
     return r;
   }
   function startRec(){ if(!rec)rec=buildRec(); if(!rec||recActive)return; try{rec.start();recActive=true;}catch(_){} }
-  function start(){ if(!apiKey){ openSettings(); return; } running=true; started=true; startRec(); paint(); }
-  function stop(){ running=false; if(rec){try{rec.stop();}catch(_){}} recActive=false; paint(); }
+  function stopRecOnly(){ if(rec){try{rec.stop();}catch(_){}} rec=null; recActive=false; }
+
+  function selectSide(s){
+    if(!apiKey){ openSettings(); return; }
+    if(running && side===s){ running=false; stopRecOnly(); paint(); return; } // tap active side again = stop
+    side=s; running=true; stopRecOnly();
+    setTimeout(function(){ if(running) startRec(); }, 180);
+    paint();
+  }
+
+  zPartner.addEventListener("click",function(e){ e.stopPropagation(); selectSide("partner"); });
+  zMine.addEventListener("click",function(e){ e.stopPropagation(); selectSide("me"); });
+  statusEl.addEventListener("click",function(e){ e.stopPropagation(); if(!running) openSettings(); else { running=false; stopRecOnly(); paint(); } });
 
   function setStatus(t,err){ statusEl.textContent=t; statusEl.classList.toggle("err",!!err); statusEl._mode="msg"; }
-  function paint(){ if(statusEl._mode==="msg"&&!running) return; statusEl.classList.remove("err"); statusEl.textContent = running ? "· 듣는 중 ·" : "설정"; statusEl._mode = running?"live":"idle"; }
+  function paint(){
+    zPartner.classList.toggle("dim", running && side!=="partner");
+    zMine.classList.toggle("dim", running && side!=="me");
+    statusEl.classList.remove("err");
+    if(running) statusEl.textContent = side==="partner" ? "· 상대 영어 듣는 중 · (탭하면 정지)" : "· 내 한국어 듣는 중 · (탭하면 정지)";
+    else statusEl.textContent = "설정";
+    statusEl._mode = running?"live":"idle";
+  }
 
-  // tap anywhere (not on interactive) toggles listening
-  $("app").addEventListener("click",function(e){
-    if(e.target.closest("[data-int]")) return;
-    running?stop():start();
-  });
-  statusEl.addEventListener("click",function(e){ e.stopPropagation();
-    if(statusEl._mode==="idle"||statusEl.textContent==="설정") openSettings(); else running?stop():start();
-  });
-
-  // ---- settings / 문장함 sheet ----
+  // sheets
   function openSheet(){ $("sheet").classList.add("open"); }
   function closeSheet(){ $("sheet").classList.remove("open"); }
   document.querySelector("[data-close]").onclick=closeSheet;
@@ -224,9 +235,9 @@
       '<input class="key" id="k" type="password" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off" spellcheck="false">'+
       '<button class="btn" id="ks">저장</button>'+
       '<button class="link" id="openSaved">문장함 열기</button>'+
-      '<p class="fine">마이크는 HTTPS에서만 켜져 (크롬 권장). 화면을 탭하면 듣기 시작/정지. 발음 힌트는 어려운 단어에 자동으로 붙어.</p>';
+      '<p class="fine">위 영역(상대)을 탭하면 영어를 듣고, 아래 영역(나)을 탭하면 한국어를 들어. 같은 쪽을 다시 탭하면 정지. 마이크는 HTTPS에서만 켜져 (크롬 권장).</p>';
     $("k").value=apiKey;
-    $("ks").onclick=function(){ var v=$("k").value.trim(); if(v){apiKey=v;localStorage.setItem("cue_key",v);} closeSheet(); if(apiKey&&!running) start(); };
+    $("ks").onclick=function(){ var v=$("k").value.trim(); if(v){apiKey=v;localStorage.setItem("cue_key",v);} closeSheet(); };
     $("openSaved").onclick=renderSaved;
     openSheet();
   }
@@ -249,7 +260,6 @@
     openSheet();
   }
 
-  // init
   paint();
 })();
 </script>
