@@ -59,8 +59,7 @@
   .sheet .panel{ position:absolute; left:0; right:0; bottom:0; background:var(--bg);
     border-radius:22px 22px 0 0; padding:24px var(--pad) calc(env(safe-area-inset-bottom) + 24px); max-height:80dvh; overflow:auto; }
   .sheet h2{ font-family:Pretendard; font-size:18px; font-weight:700; margin-bottom:16px; }
-  .sheet .lbl{ font-size:13px; color:var(--sub); margin:16px 0 8px; }
-  .sheet .lbl:first-of-type{ margin-top:0; }
+  .sheet .lbl{ font-size:13px; color:var(--sub); margin-bottom:8px; }
   input.key{ width:100%; font-family:Pretendard; font-size:15px; padding:15px 16px; border:1px solid var(--sub); border-radius:14px; background:transparent; color:var(--fg); }
   input.key:focus{ outline:none; border-color:var(--fg); }
   .btn{ width:100%; height:52px; border:none; border-radius:26px; background:var(--line); color:var(--bg); font-family:Pretendard; font-size:15px; font-weight:700; cursor:pointer; margin-top:20px; }
@@ -113,21 +112,15 @@
     "Personality: witty, charming, well-mannered, sharp, quick. He speaks Korean; you output English he'll read aloud — natural and spoken, never stiff or literal, keeping his personality.";
   var TONE = { casual:"Register: relaxed, friendly, conversational (new friend / date).",
                business:"Register: polished, professional but warm (meeting / networking)." };
-  var FORMAT =
-    " Respond with ONLY a JSON object: {\"en\":\"<the English>\",\"hints\":[{\"word\":\"<exact word copied from en>\",\"pron\":\"<Korean hangul pronunciation>\"}]}. " +
-    "In hints, pick 0-4 words a Korean speaker may find hard to pronounce. Copy each word exactly as it appears in en. No markdown, no extra text.";
-  var PARTNER = "Translate this English (the other person is speaking) into natural conversational Korean so my user understands. Output ONLY the Korean, no quotes.";
   var CLAUDE_MODEL = "claude-haiku-4-5";
-  var STT_MODEL = "gpt-4o-mini-transcribe";
 
   var $=function(s){return document.getElementById(s);};
-  var pEn=$("pEn"), pKo=$("pKo"), mEn=$("mEn"), mKo=$("mKo"), statusEl=$("status"), seg=$("seg");
+  var mEn=$("mEn"), mKo=$("mKo"), statusEl=$("status"), seg=$("seg");
 
-  var apiKey=localStorage.getItem("cue_key")||"";       // Claude
-  var oaKey=localStorage.getItem("cue_okey")||"";        // OpenAI (whisper)
+  var apiKey=localStorage.getItem("cue_key")||"";
   var preset=localStorage.getItem("cue_preset")||"casual";
   var saved=JSON.parse(localStorage.getItem("cue_saved")||"[]");
-  var current=null, listening=false;
+  var current=null, listening=false, rec=null, recActive=false;
 
   renderOut("I’m really into golf. I play every weekend, and lately I’ve been fixing my swing.",
     [{word:"weekend",pron:"위켄드"},{word:"lately",pron:"레이틀리"},{word:"swing",pron:"스윙"}]);
@@ -151,7 +144,7 @@
     mEn.innerHTML=html; mEn.classList.remove("idle");
   }
 
-  // ---- Claude translate (streaming for speed) ----
+  // ---- Claude (streaming) ----
   var ANTHRO="https://api.anthropic.com/v1/messages";
   function cHeaders(){ return {"content-type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"}; }
   function askStream(text, sys, onDelta){
@@ -187,92 +180,34 @@
       askHints(en).then(function(hints){ renderOut(en,hints); }).catch(function(){});
     }).catch(function(e){ setStatus(e.message,true); mEn.textContent="(오류)"; });
   }
-  function handlePartner(english){
-    pEn.textContent=english; pKo.textContent="…";
-    askStream(english,PARTNER,function(txt){ pKo.textContent=txt; })
-    .catch(function(e){ setStatus(e.message,true); pKo.textContent="(오류)"; });
-  }
 
-  // ---- OpenAI whisper transcription (auto language) ----
-  function transcribe(blob){
-    var fd=new FormData();
-    fd.append("file", blob, "audio.webm");
-    fd.append("model", STT_MODEL);
-    fd.append("response_format","json");
-    return fetch("https://api.openai.com/v1/audio/transcriptions",{
-      method:"POST", headers:{ "Authorization":"Bearer "+oaKey }, body:fd
-    }).then(function(r){ if(!r.ok){ if(r.status===401) throw new Error("OpenAI 키 확인 (설정)"); throw new Error("음성인식 오류 "+r.status);} return r.json(); })
-     .then(function(d){ return (d.text||"").trim(); });
-  }
-  function route(text){
-    if(!text) return;
-    if(/[가-힣]/.test(text)) handleMine(text);   // has Hangul → my Korean
-    else handlePartner(text);                             // else → partner English
-  }
-
-  // ---- mic capture + simple VAD (speak-only chunks) ----
-  var mediaStream=null, audioCtx=null, analyser=null, recorder=null, chunks=[], rafId=null;
-  var speaking=false, hadSpeech=false, silenceStart=0, speechStart=0, buf=null;
-  var THRESH=6, SILENCE_MS=500, MAX_MS=9000;
-
-  function pickMime(){
-    var opts=["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/aac"];
-    for(var i=0;i<opts.length;i++){ if(window.MediaRecorder && MediaRecorder.isTypeSupported(opts[i])) return opts[i]; }
-    return "";
-  }
-  function newRecorder(){
-    var mime=pickMime();
-    var r = mime ? new MediaRecorder(mediaStream,{mimeType:mime}) : new MediaRecorder(mediaStream);
-    r.ondataavailable=function(e){ if(e.data&&e.data.size>0) chunks.push(e.data); };
-    r.onstop=function(){
-      var b=new Blob(chunks,{type:r.mimeType||"audio/webm"}); chunks=[];
-      if(hadSpeech && b.size>1200){ transcribe(b).then(route).catch(function(e){ setStatus(e.message,true); }); }
-      hadSpeech=false;
-      if(listening){ try{ recorder=newRecorder(); recorder.start(); }catch(_){} }
-    };
+  // ---- on-device speech (instant) ----
+  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  function buildRec(){
+    if(!SR){ setStatus("이 브라우저는 음성인식 미지원 (크롬 권장)",true); return null; }
+    var r=new SR(); r.lang="ko-KR"; r.continuous=true; r.interimResults=true;
+    r.onresult=function(ev){ var fin="",it=""; for(var i=ev.resultIndex;i<ev.results.length;i++){ var t=ev.results[i][0].transcript; ev.results[i].isFinal?fin+=t:it+=t; }
+      if(it) mKo.textContent=it; if(fin.trim()) handleMine(fin.trim()); };
+    r.onerror=function(e){ if(e.error==="not-allowed"||e.error==="service-not-allowed"){ setStatus("마이크 권한을 허용해줘",true); listening=false; paint(); } else if(e.error!=="no-speech"){ setStatus("음성 오류: "+e.error,true);} };
+    r.onend=function(){ recActive=false; if(listening){ try{ r.start(); recActive=true; }catch(_){} } };
     return r;
   }
-  function monitor(){
-    if(!listening) return;
-    analyser.getByteTimeDomainData(buf);
-    var sum=0; for(var i=0;i<buf.length;i++){ sum+=Math.abs(buf[i]-128); }
-    var level=sum/buf.length, now=performance.now();
-    if(level>THRESH){ if(!speaking){ speaking=true; speechStart=now; } hadSpeech=true; silenceStart=0; }
-    else if(speaking){ if(!silenceStart) silenceStart=now; else if(now-silenceStart>SILENCE_MS){ cut(); } }
-    if(speaking && now-speechStart>MAX_MS){ cut(); }
-    rafId=requestAnimationFrame(monitor);
-  }
-  function cut(){ speaking=false; silenceStart=0; if(recorder && recorder.state==="recording"){ try{ recorder.stop(); }catch(_){} } }
-
   function startListening(){
-    if(!apiKey||!oaKey){ openSettings(); return; }
-    navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}}).then(function(s){
-      mediaStream=s;
-      audioCtx=new (window.AudioContext||window.webkitAudioContext)();
-      var src=audioCtx.createMediaStreamSource(s);
-      analyser=audioCtx.createAnalyser(); analyser.fftSize=1024; buf=new Uint8Array(analyser.fftSize);
-      src.connect(analyser);
-      recorder=newRecorder(); recorder.start();
-      listening=true; paint(); monitor();
-    }).catch(function(){ setStatus("마이크 권한을 허용해줘",true); });
+    if(!apiKey){ openSettings(); return; }
+    if(!rec) rec=buildRec(); if(!rec) return;
+    listening=true; try{ rec.start(); recActive=true; }catch(_){}
+    paint();
   }
-  function stopListening(){
-    listening=false; if(rafId) cancelAnimationFrame(rafId);
-    if(recorder && recorder.state==="recording"){ try{ recorder.stop(); }catch(_){} }
-    if(mediaStream){ mediaStream.getTracks().forEach(function(t){ t.stop(); }); mediaStream=null; }
-    if(audioCtx){ try{ audioCtx.close(); }catch(_){} audioCtx=null; }
-    speaking=false; hadSpeech=false; paint();
-  }
+  function stopListening(){ listening=false; if(rec){ try{ rec.stop(); }catch(_){} } recActive=false; paint(); }
 
-  // ---- interaction ----
   $("app").addEventListener("click",function(e){ if(e.target.closest("[data-int]")) return; listening?stopListening():startListening(); });
   statusEl.addEventListener("click",function(e){ e.stopPropagation(); if(!listening) openSettings(); else stopListening(); });
 
-  function setStatus(t,err){ statusEl.textContent=t; statusEl.classList.toggle("err",!!err); statusEl._m="msg"; }
+  function setStatus(t,err){ statusEl.textContent=t; statusEl.classList.toggle("err",!!err); }
   function paint(){
     statusEl.classList.remove("err");
-    if(listening){ statusEl.innerHTML='<span class="rec"></span>듣는 중 · 그냥 말하면 자동 (탭하면 정지)'; statusEl._m="live"; }
-    else { statusEl.textContent="설정"; statusEl._m="idle"; }
+    if(listening){ statusEl.innerHTML='<span class="rec"></span>듣는 중 · 한국어로 말하세요 (탭하면 정지)'; }
+    else statusEl.textContent="설정";
   }
 
   // ---- settings / saved ----
@@ -282,16 +217,13 @@
   function openSettings(){
     $("panel").innerHTML=
       '<h2>설정</h2>'+
-      '<div class="lbl">Claude API 키 (번역)</div>'+
+      '<div class="lbl">Claude API 키 (이 브라우저에만 저장)</div>'+
       '<input class="key" id="k1" type="password" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off" spellcheck="false">'+
-      '<div class="lbl">OpenAI API 키 (음성인식·자동 언어감지)</div>'+
-      '<input class="key" id="k2" type="password" placeholder="sk-..." autocomplete="off" autocapitalize="off" spellcheck="false">'+
       '<button class="btn" id="ks">저장</button>'+
       '<button class="link" id="openSaved">문장함 열기</button>'+
-      '<p class="fine">두 키 모두 이 브라우저에만 저장돼. 화면 아무 데나 탭하면 듣기 시작/정지 — 그냥 말하면 한/영 알아서 구분해. 마이크는 HTTPS(크롬 권장)에서만 켜져.</p>';
-    $("k1").value=apiKey; $("k2").value=oaKey;
-    $("ks").onclick=function(){ var a=$("k1").value.trim(), o=$("k2").value.trim();
-      if(a){apiKey=a;localStorage.setItem("cue_key",a);} if(o){oaKey=o;localStorage.setItem("cue_okey",o);} closeSheet(); };
+      '<p class="fine">화면 아무 데나 탭하면 듣기 시작/정지. 한국어로 말하면 아래에 영어로 바로 떠. 상단(상대)은 안경 통역이 담당해 앱에선 바뀌지 않아. 마이크는 HTTPS·크롬에서 가장 잘 돼.</p>';
+    $("k1").value=apiKey;
+    $("ks").onclick=function(){ var a=$("k1").value.trim(); if(a){apiKey=a;localStorage.setItem("cue_key",a);} closeSheet(); };
     $("openSaved").onclick=renderSaved;
     openSheet();
   }
