@@ -118,7 +118,7 @@
     "In hints, pick 0-4 words a Korean speaker may find hard to pronounce. Copy each word exactly as it appears in en. No markdown, no extra text.";
   var PARTNER = "Translate this English (the other person is speaking) into natural conversational Korean so my user understands. Output ONLY the Korean, no quotes.";
   var CLAUDE_MODEL = "claude-haiku-4-5";
-  var STT_MODEL = "whisper-1";
+  var STT_MODEL = "gpt-4o-mini-transcribe";
 
   var $=function(s){return document.getElementById(s);};
   var pEn=$("pEn"), pKo=$("pKo"), mEn=$("mEn"), mKo=$("mKo"), statusEl=$("status"), seg=$("seg");
@@ -151,27 +151,45 @@
     mEn.innerHTML=html; mEn.classList.remove("idle");
   }
 
-  // ---- Claude translate ----
-  function ask(text, mode){
-    var sys = mode==="partner" ? PARTNER : (PERSONA+" "+TONE[preset]+FORMAT);
-    return fetch("https://api.anthropic.com/v1/messages",{
-      method:"POST",
-      headers:{ "content-type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true" },
-      body:JSON.stringify({ model:CLAUDE_MODEL, max_tokens:500, system:sys, messages:[{role:"user",content:text}] })
-    }).then(function(r){ if(!r.ok){ if(r.status===401) throw new Error("Claude 키 확인 (설정)"); throw new Error("번역 오류 "+r.status);} return r.json(); })
-     .then(function(d){ var b=(d.content||[]).find(function(x){return x.type==="text";}); return b?b.text.trim():""; });
+  // ---- Claude translate (streaming for speed) ----
+  var ANTHRO="https://api.anthropic.com/v1/messages";
+  function cHeaders(){ return {"content-type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"}; }
+  function askStream(text, sys, onDelta){
+    return fetch(ANTHRO,{method:"POST",headers:cHeaders(),
+      body:JSON.stringify({ model:CLAUDE_MODEL, max_tokens:300, stream:true, system:sys, messages:[{role:"user",content:text}] })
+    }).then(function(res){ if(!res.ok){ if(res.status===401) throw new Error("Claude 키 확인 (설정)"); throw new Error("번역 오류 "+res.status);}
+      var reader=res.body.getReader(), dec=new TextDecoder(), full="", sbuf="";
+      function pump(){ return reader.read().then(function(o){
+        if(o.done) return full;
+        sbuf+=dec.decode(o.value,{stream:true});
+        var lines=sbuf.split("\n"); sbuf=lines.pop();
+        lines.forEach(function(line){ var l=line.trim(); if(l.indexOf("data:")===0){ var j=l.slice(5).trim();
+          if(j&&j!=="[DONE]"){ try{ var ev=JSON.parse(j); if(ev.type==="content_block_delta"&&ev.delta&&ev.delta.type==="text_delta"){ full+=ev.delta.text; if(onDelta) onDelta(full);} }catch(_){}} } });
+        return pump();
+      }); }
+      return pump();
+    });
+  }
+  function askHints(en){
+    return fetch(ANTHRO,{method:"POST",headers:cHeaders(),
+      body:JSON.stringify({ model:CLAUDE_MODEL, max_tokens:200,
+        system:"Given an English sentence, return ONLY JSON {\"hints\":[{\"word\":\"<exact word from the sentence>\",\"pron\":\"<Korean hangul pronunciation>\"}]} — pick 0-4 words a Korean speaker may find hard to pronounce. No other text.",
+        messages:[{role:"user",content:en}] })
+    }).then(function(r){ return r.ok?r.json():null; }).then(function(d){ if(!d) return [];
+      var b=(d.content||[]).find(function(x){return x.type==="text";}); if(!b) return [];
+      try{ return (JSON.parse(b.text.match(/\{[\s\S]*\}/)[0]).hints)||[]; }catch(_){ return []; } });
   }
   function handleMine(korean){
     mKo.textContent=korean; mEn.textContent="…"; mEn.classList.remove("idle");
-    ask(korean,"mine").then(function(raw){
-      var obj=null; try{ obj=JSON.parse(raw); }catch(_){ var m=raw.match(/\{[\s\S]*\}/); if(m){ try{obj=JSON.parse(m[0]);}catch(__){} } }
-      if(obj&&obj.en){ renderOut(obj.en,obj.hints||[]); current={ko:korean,en:obj.en}; }
-      else { mEn.textContent=raw||"(응답 없음)"; current={ko:korean,en:raw}; }
+    var sys=PERSONA+" "+TONE[preset]+" Output ONLY the English sentence he should say. No quotes, no notes.";
+    askStream(korean,sys,function(txt){ mEn.textContent=txt; }).then(function(en){
+      current={ko:korean,en:en};
+      askHints(en).then(function(hints){ renderOut(en,hints); }).catch(function(){});
     }).catch(function(e){ setStatus(e.message,true); mEn.textContent="(오류)"; });
   }
   function handlePartner(english){
     pEn.textContent=english; pKo.textContent="…";
-    ask(english,"partner").then(function(ko){ pKo.textContent=ko; })
+    askStream(english,PARTNER,function(txt){ pKo.textContent=txt; })
     .catch(function(e){ setStatus(e.message,true); pKo.textContent="(오류)"; });
   }
 
@@ -195,7 +213,7 @@
   // ---- mic capture + simple VAD (speak-only chunks) ----
   var mediaStream=null, audioCtx=null, analyser=null, recorder=null, chunks=[], rafId=null;
   var speaking=false, hadSpeech=false, silenceStart=0, speechStart=0, buf=null;
-  var THRESH=6, SILENCE_MS=850, MAX_MS=9000;
+  var THRESH=6, SILENCE_MS=500, MAX_MS=9000;
 
   function pickMime(){
     var opts=["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/aac"];
