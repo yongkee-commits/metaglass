@@ -271,6 +271,8 @@ h3 { font-size: 1.25rem; line-height: 1.4; letter-spacing: -0.005em; font-weight
 .price .amount { display: flex; align-items: baseline; gap: 12px; }
 .price .amount .big { font-family: var(--serif); font-size: 2.5rem; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .price .amount .per { color: var(--ink-3); font-size: 0.9375rem; }
+.price .was { color: var(--ink-2); font-size: 0.9875rem; margin-top: -12px; }
+.price .was s { color: var(--ink-3); text-decoration-thickness: 1px; }
 .includes { display: grid; gap: 10px; }
 .includes li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 12px; align-items: start; color: var(--ink-2); font-size: 0.9875rem; }
 .includes .lucide { margin-top: 0.5em; color: var(--ink-3); }
