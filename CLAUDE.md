@@ -1,7 +1,7 @@
 # Project rules
 
 ## Context
-This repository holds concept and design work for a Korean service that records parents' life stories week by week and turns them into a printed book, with a later memorial service in mind. Working documents live in `docs/`.
+This repository holds the brand, site, and concept work for **주간 (jugan)**, a Korean subscription that sends parents one question a week over KakaoTalk and binds the 52 answers into a hardcover book titled "주간 <parent name>". A memorial service may follow later. The landing page lives in `site/`, working documents in `docs/`.
 
 ## Design skills
 - Load `apple-design` (`.claude/skills/apple-design`) whenever building or reviewing UI, motion, gestures, sheets, typography, or translucent surfaces.

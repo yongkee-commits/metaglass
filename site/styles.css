@@ -1,4 +1,4 @@
-/* 화요일의 질문 — 랜딩 페이지 스타일 */
+/* 주간 — 랜딩 페이지 스타일 */
 
 :root {
   --paper: #FBFBF9;
@@ -255,7 +255,7 @@ h3 { font-size: 1.25rem; line-height: 1.4; letter-spacing: -0.005em; font-weight
   flex-direction: column;
   justify-content: space-between;
 }
-.book-cover .title { font-family: var(--serif); font-size: 1.25rem; font-weight: 600; line-height: 1.4; letter-spacing: -0.01em; }
+.book-cover .title { font-family: var(--serif); font-size: 1.5rem; font-weight: 600; line-height: 1.3; letter-spacing: -0.01em; }
 .book-cover .meta { font-size: 0.75rem; color: var(--ink-3); letter-spacing: 0.04em; line-height: 1.6; }
 .spec { display: grid; gap: 14px; max-width: 34em; }
 .spec li { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }

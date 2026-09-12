@@ -1,4 +1,4 @@
-// 화요일의 질문 — 랜딩 페이지 스크립트
+// 주간 — 랜딩 페이지 스크립트
 
 // 사전 신청 접수처. Formspree, Tally, Google Apps Script 등 POST를 받는 URL을 넣으세요.
 const ENDPOINT = '';
